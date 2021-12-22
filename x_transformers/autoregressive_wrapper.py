@@ -3,6 +3,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from entmax import entmax_bisect
+import transformers
+from tqdm import tqdm
 
 def exists(val):
     return val is not None
@@ -53,10 +55,11 @@ class AutoregressiveWrapper(nn.Module):
         self.max_seq_len = net.max_seq_len
 
     @torch.no_grad()
-    def generate(self, start_tokens, seq_len=40, eos_token = None, temperature = 1., filter_logits_fn = top_k, filter_thres = 0.9, min_p_pow=2.0, min_p_ratio=0.02, **kwargs):
+    def generate(self, start_tokens, seq_len, eos_token = None, temperature = 1., filter_logits_fn = top_k, repetition_penalty=1.0, filter_thres = 0.9, min_p_pow=2.0, min_p_ratio=0.02, **kwargs):
         device = start_tokens.device
         was_training = self.net.training
         num_dims = len(start_tokens.shape)
+        logits_processor = transformers.RepetitionPenaltyLogitsProcessor(float(repetition_penalty))
 
         if num_dims == 1:
             start_tokens = start_tokens[None, :]
@@ -70,11 +73,12 @@ class AutoregressiveWrapper(nn.Module):
         if mask is None:
             mask = torch.full_like(out, True, dtype=torch.bool, device=out.device)
 
-        for _ in range(seq_len):
+        for _ in tqdm(range(seq_len)):
             x = out[:, -self.max_seq_len:]
             mask = mask[:, -self.max_seq_len:]
 
             logits = self.net(x, mask=mask, **kwargs)[:, -1, :]
+            logits = logits_processor(x, logits)
 
             if filter_logits_fn in {top_k, top_p}:
                 filtered_logits = filter_logits_fn(logits, thres = filter_thres)
@@ -86,6 +90,10 @@ class AutoregressiveWrapper(nn.Module):
 
             elif filter_logits_fn is entmax:
                 probs = entmax(logits / temperature, alpha = ENTMAX_ALPHA, dim=-1)
+
+            elif filter_logits_fn is 'nucleus_entmax':
+                filtered_logits = top_p(logits, thres = filter_thres)
+                probs = entmax(filtered_logits / temperature, alpha=ENTMAX_ALPHA, dim=-1)
 
             sample = torch.multinomial(probs, 1)
 
