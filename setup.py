@@ -17,7 +17,8 @@ setup(
   install_requires=[
     'torch>=1.6',
     'einops>=0.3',
-    'entmax'
+    'entmax',
+    'transformers'
   ],
   classifiers=[
     'Development Status :: 4 - Beta',
